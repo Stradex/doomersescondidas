@@ -1,0 +1,4 @@
+server int sv_seektime = 2;
+server int sv_hidetime = 30;
+server bool sv_hidepowers = true;
+server int sv_seekperplayers = 0;

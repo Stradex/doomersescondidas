@@ -1,0 +1,5 @@
+ACTOR NoScreenPower : PowerStrength
+{
+  Powerup.Duration 35
+  Powerup.Color 0, 0, 0, 0.0
+}

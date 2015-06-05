@@ -1,0 +1,556 @@
+#include "zcommon.acs"
+#library "escondidas"
+
+//IDs de los mensajes
+#DEFINE PAREJAMSG		100
+#DEFINE	KINGMSG			101
+#DEFINE	TIMEMSG			102
+#DEFINE MODEMSG			103
+#DEFINE PODERMSG		104
+
+//Scripts
+#DEFINE TELPOINT 	799
+#DEFINE	SETPOWER	800
+#DEFINE NOWEAPONS 	985
+#DEFINE SEEKPOWERS 	986
+#DEFINE HIDEPOWERS 	987
+#DEFINE CLEARPOWERS 988
+#DEFINE FREEZE		989
+#DEFINE TIMECOUNT	990
+#DEFINE GIVEWEAPONS 991
+#DEFINE NOAMMO 		992
+#DEFINE UNFREEZE	993
+#DEFINE CLEARWEAPONS 994
+#DEFINE	SEEKCOUNT	995
+#DEFINE	KILLSEEKERS	996
+#DEFINE GIVEKEYS	997
+//Constantes globales
+#DEFINE MAXPLAYERS 32
+
+//Poderes
+#DEFINE	CANTPOWERS		3
+#DEFINE	TELEPORTPOWER	0
+#DEFINE	SPEEDPOWER		1
+#DEFINE	INVISIBLEPOWER	2
+#DEFINE	FREEZENODE		3
+
+#DEFINE SPEEDURATION	15
+
+
+int Palive[MAXPLAYERS];
+bool Pseek[MAXPLAYERS];
+int Ppower[MAXPLAYERS];
+bool PowUsed[MAXPLAYERS];
+int PTeleport[MAXPLAYERS][3];
+
+int pActivado = 0;
+int tMax = 0;
+int hideTime = 30;
+int seekTime = 120;
+int cPlayers = 0;
+int waitTime = false;
+int luckyHidder = -1;
+int tTime[MAXPLAYERS];
+int hidePSeek = 4;
+int pComenzo = 0;
+
+script 899 OPEN
+{
+	int i= 0;
+	for (i=0; i < MAXPLAYERS; i++)
+	{
+		tTime[i] = 0;
+		Palive[i] = FALSE;
+		Pseek[i] = FALSE;
+		Ppower[i] = -1;
+		PowUsed[i] = FALSE;
+		for (int k=0; k < 3; k++)
+			PTeleport[i][k] = -1;
+	}
+		
+	while (PlayerCount() <= 0)
+		delay(20);
+	//Balancear TEAMS
+	tMax = PlayerCount()/2;
+	
+	//Seleccionando a los hidders y seekers
+	int p;
+	int dSeekers = 0;
+	int tcantSeek = 1;
+	if (GetCVar("sv_seekperplayers"))
+	{
+		dSeekers = GetCVar("sv_seekperplayers");
+	}
+	if (dSeekers > 1)
+	{
+	int cantseek = FixedDiv((PlayerCount()-1), dSeekers)+0.5;
+	tcantSeek = cantseek >> 16;
+	if (tcantSeek <= 0)
+		tcantSeek = 1;
+	}
+	for (i=0; i < tcantSeek; i++)
+	{
+		do
+		{
+			p = random(0, MAXPLAYERS);
+		}while ((!Palive[p] && !PlayerInGame(p)) || Pseek[p]);
+		Pseek[p] = true;
+	}
+	if (tcantSeek <= 1)
+		printbold(s:"Todos tienen que esconderse de ",  n:p + 1, s:"\n Tienen ", d:hideTime, s:" segundos para esconderse");
+	else
+		printbold(s:"Hay más de un Seeker, es hora de esconderse.");
+	waitTime = true;
+	cPlayers = PlayerCount();
+	//Estableciendo tiempos para esconderse y buscar
+	if (GetCVar("sv_seektime"))
+	{
+		int minutes = GetCVar("sv_seektime");
+		if (minutes <= 1)
+			minutes = 1;
+		seekTime = minutes*60;
+		if (seekTime <= 0)
+			seekTime = 120;
+	}
+	if (GetCVar("sv_hidetime"))
+	{
+		int segundos = GetCVar("sv_hidetime");
+		if (segundos <= 1)
+			segundos = 1;
+		hideTime = segundos;
+		if (hideTime <= 0)
+			hideTime = 30;
+	}
+	if (GetCVar("sv_seektime"))
+	{
+	pComenzo = 1;
+	ACS_ExecuteAlways(TIMECOUNT, 0, hideTime);
+	do
+	{
+		p = random(0, MAXPLAYERS);
+		delay(1);
+	}while ((!Palive[p] && !PlayerInGame(p)) || Pseek[p]);
+	luckyHidder = p;
+	int hPower = random(0, CANTPOWERS-1);
+	Ppower[luckyHidder] = hPower;
+	printBold(s: "El suertudo es ", n:luckyHidder+1);
+	}
+}
+script FREEZE (int Tid)
+{
+	setActorProperty(Tid, APROP_Speed, 0.0);
+}
+script NOAMMO(int Tid)
+{
+	if ((CheckInventory("Pistol") || CheckInventory("Chaingun")) && CheckInventory("Clip") > 0)
+	{
+		TakeInventory("Clip", CheckInventory("Clip"));
+	}
+	if ((CheckInventory("Shotgun") || CheckInventory("SuperShotgun")) && CheckInventory("Shell") > 0)
+	{
+		TakeInventory("Shell", CheckInventory("Shell"));
+	}
+	if (CheckInventory("RocketLauncher") && CheckInventory("RocketAmmo") > 0)
+	{
+		TakeInventory("RocketAmmo", CheckInventory("RocketAmmo"));
+	}
+	if ((CheckInventory("BFG9000") || CheckInventory("PlasmaRifle")) && CheckInventory("Cell") > 0)
+	{
+		TakeInventory("Cell", CheckInventory("Cell"));
+	}
+}
+script GIVEWEAPONS (int Tid)
+{
+	if (!CheckInventory("Pistol"))
+		GiveInventory("Pistol", 1);
+	if (!CheckInventory("Shotgun"))
+		GiveInventory("Shotgun", 1);
+	if (!CheckInventory("SuperShotgun"))
+		GiveInventory("SuperShotgun", 1);
+	if (!CheckInventory("RocketLauncher"))
+		GiveInventory("RocketLauncher", 1);
+	if (!CheckInventory("PlasmaRifle"))
+		GiveInventory("PlasmaRifle", 1);
+
+	if ((CheckInventory("Pistol") || CheckInventory("Chaingun")) && CheckInventory("Clip") <= 0)
+	{
+		GiveInventory("Clip", 100);
+	}
+	if ((CheckInventory("Shotgun") || CheckInventory("SuperShotgun")) && CheckInventory("Shell") <= 0)
+	{
+		GiveInventory("Shell", 50);
+	}
+	if (CheckInventory("RocketLauncher") && CheckInventory("RocketAmmo") <= 0)
+	{
+		GiveInventory("RocketAmmo", 50);
+	}
+	if ((CheckInventory("BFG9000") || CheckInventory("PlasmaRifle")) && CheckInventory("Cell") <= 0)
+	{
+		GiveInventory("Cell", 300);
+	}
+}
+script GIVEKEYS (int Tid)
+{
+	if (CheckInventory("RedCard"))
+		GiveInventory("RedCard", 1);
+	if (CheckInventory("BlueCard"))
+		GiveInventory("BlueCard", 1);
+	if (CheckInventory("YellowCard"))
+		GiveInventory("YellowCard", 1);
+	if (CheckInventory("RedSkull"))
+		GiveInventory("RedSkull", 1);
+	if (CheckInventory("BlueSkull"))
+		GiveInventory("BlueSkull", 1);
+	if (CheckInventory("YellowSkull"))
+		GiveInventory("YellowSkull", 1);
+}
+script UNFREEZE (int Tid)
+{
+	setActorProperty(Tid, APROP_Speed, 1.0);
+}
+script CLEARWEAPONS (int Tid)
+{
+	if (CheckInventory("Pistol"))
+		TakeInventory("Pistol", 1);
+	if (CheckInventory("Chaingun"))
+		TakeInventory("Chaingun", 1);
+	if (CheckInventory("Shotgun"))
+		TakeInventory("Shotgun", 1);
+	if (CheckInventory("SuperShotgun"))
+		TakeInventory("SuperShotgun", 1);
+	if (CheckInventory("RocketLauncher"))
+		TakeInventory("RocketLauncher", 1);
+	if (CheckInventory("BFG9000"))
+		TakeInventory("BFG9000", 1);
+	if (CheckInventory("PlasmaRifle"))
+		TakeInventory("PlasmaRifle", 1);
+		
+	//Armas de otros wads personalizados
+	//Epic 2
+	if (CheckInventory("Thrurocketlauncher"))
+		TakeInventory("Thrurocketlauncher", 1);
+}
+script TIMECOUNT (int left)
+{
+	int i=0;
+	int minutos=0;
+	int segundos=0;
+	for (i=60; i <= left; i+=60)
+		minutos++;
+	segundos = left-(minutos*60);
+
+	if (minutos <=0 && segundos <= 30)
+		SetFont("BIGFONT");
+	if (segundos >= 10)
+		HudMessageBold(s:"Tiempo restante: ", d:minutos, s:":", d:segundos; HUDMSG_PLAIN, TIMEMSG, CR_RED, 1.5, 0.15, 0);
+	else
+		HudMessageBold(s:"Tiempo restante: ", d:minutos, s:":0", d:segundos; HUDMSG_PLAIN, TIMEMSG, CR_RED, 1.5, 0.15, 0);
+
+	if (minutos <=0 && segundos <= 30)	
+		SetFont("SMALLFONT");
+	//ACS_ExecuteAlways(NOAMMO, 0, pSeeker+1000);
+	delay(35);
+	left--;
+	if (minutos <=0 && segundos <=0)
+	{
+		HudMessageBold(s:"Ahora los seekers pueden salir a buscarlos"; HUDMSG_PLAIN, TIMEMSG, CR_RED, 1.5, 0.15, 0);
+		int hidePlayers = 0;
+		for (int x=0; x < MAXPLAYERS; x++)
+		{
+			if (!Palive[x] && !PlayerInGame(x))
+				continue;
+			if (!Pseek[x])
+				hidePlayers++;
+		}		
+		delay(100);
+		ACS_ExecuteAlways(SEEKCOUNT, 0, seekTime+((hidePlayers-1)*20));
+		waitTime = false;
+	} else {
+		ACS_ExecuteAlways(TIMECOUNT, 0, left);
+	}
+}
+
+script SEEKCOUNT (int left)
+{
+	int minutos=0;
+	int segundos=0;
+	for (int i=60; i <= left; i+=60)
+		minutos++;
+	segundos = left-(minutos*60);
+
+	if (minutos <=0 && segundos <= 30)
+		SetFont("BIGFONT");
+	if (segundos >= 10)
+		HudMessageBold(s:"Tiempo restante para encontrar a todos: ", d:minutos, s:":", d:segundos; HUDMSG_PLAIN, TIMEMSG, CR_RED, 1.5, 0.15, 0);
+	else
+		HudMessageBold(s:"Tiempo restante para encontrar a todos: ", d:minutos, s:":0", d:segundos; HUDMSG_PLAIN, TIMEMSG, CR_RED, 1.5, 0.15, 0);
+
+	if (minutos <=0 && segundos <= 30)	
+		SetFont("SMALLFONT");
+	delay(35);
+	left--;
+	if (minutos <=0 && segundos <=0)
+	{
+		HudMessageBold(s:" "; HUDMSG_PLAIN, TIMEMSG, CR_RED, 1.5, 0.15, 1);
+		ACS_ExecuteAlways(KILLSEEKERS, 0);
+	} else {
+		ACS_ExecuteAlways(SEEKCOUNT, 0, left);
+	}
+}
+script SETPOWER (int Tid, int sec)
+{
+	delay(5);
+	int nPlayer = Tid-1000;
+	switch (Ppower[nPlayer])
+	{
+		case SPEEDPOWER:
+			setActorProperty(Tid, APROP_Speed, 1.5);						
+		break;
+		case INVISIBLEPOWER:
+			if (!CheckInventory("InvisibilitySphere"))
+				GiveInventory("InvisibilitySphere", 1);
+		break;
+	}
+	
+	delay(35*sec);
+	switch (Ppower[nPlayer])
+	{
+		case SPEEDPOWER:
+			setActorProperty(Tid, APROP_Speed, 0.6);						
+		break;
+		case INVISIBLEPOWER:
+			if (CheckInventory("InvisibilitySphere"))
+				TakeInventory("InvisibilitySphere", 1);
+		break;
+	}
+	Ppower[nPlayer] = -1;
+	PowUsed[nPlayer] = false;
+}
+
+script 900 ENTER
+{
+	Thing_ChangeTID(0, 1000 + PlayerNumber());
+	Palive[PlayerNumber()] = TRUE;
+	HudMessage(s:" "; HUDMSG_PLAIN, PODERMSG, CR_BLUE, 1.8, 0.8, 1);
+	int nJump = getActorProperty(1000 + PlayerNumber(), APROP_JumpZ);
+	int SJump = nJump*2;
+	bool oneFadeIn = false;
+	bool oneFadeOut = false;
+	bool powMsg = false; //Mensaje aviso de si  tiene un poder o no el jugador
+	bool havePower = false; //avisa si tiene un poder o no
+	int PressButtons;
+	delay(10);
+	while(PlayerInGame(PlayerNumber())) {
+		//Equilibrar jugadores
+		if (!pComenzo)
+		{
+			delay(20);
+			continue;
+		}
+
+		if ((GetPlayerInfo(PlayerNumber(), PLAYERINFO_TEAM) == 1) && !Pseek[PlayerNumber()])
+		{
+			if (pActivado)
+				Player_SetTeam(0);
+		} else if (Pseek[PlayerNumber()])
+		{
+			if (GetPlayerInfo(PlayerNumber(), PLAYERINFO_TEAM) == 0)
+				Player_SetTeam(1);
+			if (!pActivado)
+				pActivado = 1;
+			/*Super Salto*/
+
+		}
+		//Todo esto se ejecuta luego de establecer al/los seeker
+		if (!Pseek[PlayerNumber()])
+		{
+			ACS_ExecuteAlways(HIDEPOWERS, 0, 1000 + PlayerNumber());
+			if (waitTime)
+				setActorProperty(1000 + PlayerNumber(), APROP_JumpZ, SJump);
+			else
+				setActorProperty(1000 + PlayerNumber(), APROP_JumpZ, nJump);
+			//Verfica si tiene o no poderes el jugador
+			if (Ppower[PlayerNumber()] != -1 && !PowUsed[PlayerNumber()])
+					havePower = true;
+			//En caso de encontrar poderes, si no se mostro nunca un mensaje, se muestra
+			if (!powMsg && havePower)
+			{
+				HudMessage(s:"Que suerte!, Tenes un poder."; HUDMSG_TYPEON | HUDMSG_LOG, 0, CR_TAN, 1.5, 0.8, 5.0, 0.05, 2.0);
+				str sPoder = "";
+				switch (Ppower[PlayerNumber()])
+				{
+					case TELEPORTPOWER:
+						sPoder = "Teletransportacion";
+					break;
+					case SPEEDPOWER:
+						sPoder = "Sanic Speed (10 seg)";					
+					break;
+					case INVISIBLEPOWER:
+						sPoder = "Invisibilidad";					
+					break;
+					default:
+						sPoder = "Ninguno";
+					break;
+				}
+				HudMessage(s:"Poder: ", s: sPoder; HUDMSG_PLAIN, PODERMSG, CR_GRAY, 1.9, 0.83, 0);
+				powMsg = true;
+			}
+		} else {
+			setActorProperty(1000 + PlayerNumber(), APROP_JumpZ, SJump);
+			if (!waitTime)
+			{
+				setActorProperty(1000 + PlayerNumber(), APROP_Speed, 1.0);
+				if (!oneFadeIn)
+				{
+					fadeto(255, 255, 255, 0.0, 0.0);
+					oneFadeIn = true;
+					oneFadeOut = false;
+				}
+				ACS_ExecuteAlways(SEEKPOWERS, 0, 1000 + PlayerNumber());
+				ACS_ExecuteAlways(GIVEWEAPONS, 0, 1000 + PlayerNumber());
+			}
+			else
+			{
+				setActorProperty(1000 + PlayerNumber(), APROP_Speed, 0.0);
+				if (!oneFadeOut)
+				{
+					fadeto(0, 0, 0, 1.0, 1.0);
+					oneFadeIn = false;
+					oneFadeOut = true;
+				}
+				ACS_ExecuteAlways(NOAMMO, 0, 1000 + PlayerNumber());
+			}
+		}
+		ACS_ExecuteAlways(GIVEKEYS, 0, 1000 + PlayerNumber());
+		if (tTime[PlayerNumber()] > 0)
+			tTime[PlayerNumber()]--;
+		if (tTime[PlayerNumber()] < 0)
+			tTime[PlayerNumber()] = 0;
+		int tDelay = 0;
+		do
+		{
+			tDelay++;
+			//En caso de que el jugador tenga poderes y no los haya usado todavia, se verfica si los va a usar
+
+			if (havePower && !PowUsed[PlayerNumber()] && Ppower[PlayerNumber()] != -1)
+			{
+				PressButtons = GetPlayerInput(-1, INPUT_BUTTONS);
+				if (PressButtons & BT_ALTATTACK)
+				{
+					if (Ppower[PlayerNumber()] == TELEPORTPOWER)
+					{
+						ACS_ExecuteAlways(TELPOINT, 0, 1000 + PlayerNumber());	
+					} else {
+						PowUsed[PlayerNumber()] = true;
+						ACS_ExecuteAlways(SETPOWER, 0, 1000 + PlayerNumber(), 10);
+						HudMessage(s:" "; HUDMSG_PLAIN, PODERMSG, CR_BLUE, 1.8, 0.8, 1);
+						HudMessage(s:"Acabas de usar tu poder"; HUDMSG_TYPEON | HUDMSG_LOG, 0, CR_TAN, 1.5, 0.8, 5.0, 0.05, 2.0);
+					}
+					havePower = false;					
+				}
+			}
+			delay(1);
+		}while (tDelay <  20);
+	}
+}
+script KILLSEEKERS(void)
+{
+	for (int x=0; x < MAXPLAYERS; x++)
+	{
+		if (!PlayerInGame(x) && !Palive[x])
+			continue;
+		if (!Pseek[x])
+			continue;
+		Thing_Damage(x+1000, 800, MOD_RAILGUN);
+		HudMessageBold(s:"Son los campeones de las escondidas"; HUDMSG_PLAIN | HUDMSG_LOG, 0, CR_TAN, 1.5, 0.8, 5.0, 0.05, 1.0);
+
+	}
+}
+script SEEKPOWERS (int Tid)
+{
+	/*Regeneracion de vida*/
+	int Laif = getActorProperty(Tid, APROP_Health);
+	if (Laif < 200)
+			setActorProperty(Tid, APROP_Health, Laif+5);
+	/*Velocidad Default*/
+	setActorProperty(Tid, APROP_Speed, 1.0);
+	/*Super Disparo*/
+	if (!CheckInventory("StrengthRune"))
+		GiveInventory("StrengthRune", 1);
+}
+script HIDEPOWERS (int Tid)
+{
+	int nPlayer = Tid-1000;
+	int Laif = getActorProperty(Tid, APROP_Health);
+	if (waitTime)
+	{
+		if (!PowUsed[nPlayer])
+			setActorProperty(Tid, APROP_Speed, 1.0);
+		if (CheckInventory("Fist"))
+			TakeInventory("Fist", 1);
+	}
+	else
+	{
+		if (!CheckInventory("Fist"))
+			GiveInventory("Fist", 1);
+
+		if (!PowUsed[nPlayer])
+			setActorProperty(Tid, APROP_Speed, 0.6);
+	}
+	if (Laif > 0)
+	{
+		Laif+=5;
+		if (Laif > 25)
+			Laif = 25;
+		setActorProperty(Tid, APROP_Health, Laif);
+	}
+
+	if (!CheckInventory("RadSuit"))
+		GiveInventory("RadSuit", 1);
+	ACS_ExecuteAlways(NOAMMO, 0, Tid);
+	ACS_ExecuteAlways(CLEARWEAPONS, 0, Tid);
+}
+script 901 DEATH
+{
+	Palive[PlayerNumber()] = FALSE;
+}
+
+script 902 RESPAWN
+{
+	Thing_ChangeTID(0, 1000 + PlayerNumber());
+	Palive[PlayerNumber()] = TRUE;
+}
+script 903 (int gone) DISCONNECT
+{
+	Palive[gone] = FALSE;
+}
+
+script TELPOINT (int Tid)
+{
+	int nPlayer = Tid - 1000;
+	if (nPlayer < 0 || nPlayer >= 32)
+		terminate;
+
+	if (tTime[nPlayer] > 0 ||Ppower[nPlayer] != TELEPORTPOWER)
+		terminate;
+	if ((PTeleport[nPlayer][0] == -1) && (PTeleport[nPlayer][1] == -1) && (PTeleport[nPlayer][2] == -1))
+	{
+		int x = GetActorX(Tid);
+		int y = GetActorY(Tid);
+		int z = GetActorZ(Tid);
+		PTeleport[nPlayer][0] = x; 
+		PTeleport[nPlayer][1] = y; 
+		PTeleport[nPlayer][2] = z; 
+		HudMessage(s:"Seleccionaste un punto de teleport"; HUDMSG_TYPEON | HUDMSG_LOG, 0, CR_TAN, 1.5, 0.8, 5.0, 0.05, 1.0);
+	} else {
+		SetActorPosition(Tid, PTeleport[nPlayer][0], PTeleport[nPlayer][1], PTeleport[nPlayer][2], 0);
+		PTeleport[nPlayer][0] = -1; 
+		PTeleport[nPlayer][1] = -1; 
+		PTeleport[nPlayer][2] = -1; 
+		HudMessage(s:"Te has teletransportado"; HUDMSG_TYPEON | HUDMSG_LOG, 0, CR_TAN, 1.5, 0.8, 5.0, 0.05, 1.0);
+		HudMessage(s:" "; HUDMSG_PLAIN, PODERMSG, CR_BLUE, 1.8, 0.8, 1);
+		Ppower[nPlayer] = -1;
+		PowUsed[nPlayer] = false;
+	}
+	tTime[nPlayer] = 2;
+}
